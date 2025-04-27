@@ -1,0 +1,480 @@
+#Requires -Version 5.1
+
+# mkweb.ps1 - Windows version of the mkweb script
+# Author: Based on original mkweb by Manz (https://manz.dev/)
+
+$VERSION = "0.4.2-win"
+
+# Import necessary modules
+Add-Type -AssemblyName System.Web
+
+function Write-ColorOutput {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Color,
+        [Parameter(Mandatory = $true)]
+        [string]$Text,
+        [switch]$NoNewLine
+    )
+
+    $originalColor = $host.UI.RawUI.ForegroundColor
+    $host.UI.RawUI.ForegroundColor = $Color
+    if ($NoNewLine) {
+        Write-Host $Text -NoNewline
+    }
+    else {
+        Write-Host $Text
+    }
+    $host.UI.RawUI.ForegroundColor = $originalColor
+}
+
+function Test-CommandExists {
+    param ($command)
+    
+    $exists = $null -ne (Get-Command $command -ErrorAction SilentlyContinue)
+    return $exists
+}
+
+function Get-MkwebParams {
+    param (
+        [Parameter(Position = 0)]
+        [string]$FolderName,
+        [switch]$Help,
+        [switch]$Check,
+        [switch]$Phaser,
+        [switch]$Lit,
+        [switch]$Version,
+        [switch]$Update
+    )
+    
+    $params = @{
+        FolderName = $FolderName.ToLowerInvariant()
+        IsHelp = $Help.IsPresent -or ($PSBoundParameters.Count -eq 0)
+        IsCheck = $Check.IsPresent
+        IsVersion = $Version.IsPresent
+        IsUpdate = $Update.IsPresent
+        IsPhaser = $FolderName -and $Phaser.IsPresent
+        IsLit = $FolderName -and $Lit.IsPresent
+        IsNormal = $FolderName -and -not ($Phaser.IsPresent -or $Lit.IsPresent)
+    }
+    
+    return $params
+}
+
+function Show-Help {
+    Write-ColorOutput -Color Green "mkweb" -NoNewLine
+    Write-Host " $VERSION - Windows version of mkweb (Original by Manz - " -NoNewline
+    Write-ColorOutput -Color Magenta "https://manz.dev/" -NoNewLine
+    Write-Host ")"
+    Write-Host ""
+    Write-Host "Syntax:"
+    Write-Host "mkweb <folder-name> [options]`tCreates a web project."
+    Write-Host ""
+    Write-Host "Examples:"
+    Write-Host "  mkweb sample-project `t`t`tCreates a vanilla HTML/CSS/JavaScript project."
+    Write-Host "  mkweb phaser-project " -NoNewline
+    Write-ColorOutput -Color Yellow "--phaser" -NoNewLine
+    Write-Host "`t`tCreates a JavaScript project with Phaser."
+    Write-Host "  mkweb lit-project " -NoNewline
+    Write-ColorOutput -Color Yellow "--lit" -NoNewLine
+    Write-Host "`t`tCreates a JavaScript project with Lit."
+    Write-Host ""
+    Write-Host "  mkweb " -NoNewline
+    Write-ColorOutput -Color Yellow "--update" -NoNewLine
+    Write-Host "`t`t`tUpdates to the latest version of mkweb."
+    Write-Host "  mkweb " -NoNewline
+    Write-ColorOutput -Color Yellow "--check" -NoNewLine
+    Write-Host "`t`t`tChecks the dependencies used by mkweb."
+    Write-Host ""
+}
+
+function Update-Mkweb {
+    Write-Host "Updating mkweb..."
+
+    $scriptPath = $MyInvocation.MyCommand.Path
+    if (-not $scriptPath) {
+        Write-ColorOutput -Color Red "Error: Could not find mkweb in PATH. Manual update required."
+        exit 3
+    }
+
+    try {
+        $downloadUrl = "https://raw.githubusercontent.com/IntelectoDev/winmkweb/refs/heads/master/mkweb.sp1" # Replace with actual URL when deployed
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $scriptPath
+        Write-ColorOutput -Color Green "Updated to the latest version."
+    }
+    catch {
+        Write-ColorOutput -Color Red "Error: $($_.Exception.Message)"
+        Write-Host "You may need administrator privileges to update this script."
+        exit 5
+    }
+    exit 0
+}
+
+function Check-Dependencies {
+    Write-Host "Checking dependencies..."
+    Write-Host "--------------"
+    
+    $notDetected = "No detected"
+    
+    # Node version
+    $nodeVersion = if (Test-CommandExists "node") { 
+        & node --version 
+    } else { 
+        $notDetected 
+    }
+    Write-ColorOutput -Color Blue "node: " -NoNewLine
+    Write-Host "$nodeVersion"
+    
+    # Curl
+    $curl = if (Test-CommandExists "curl") { "Installed" } else { $notDetected }
+    Write-ColorOutput -Color Cyan "curl: " -NoNewLine
+    Write-Host "$curl"
+    
+    # Git
+    $git = if (Test-CommandExists "git") { "Installed" } else { $notDetected }
+    Write-ColorOutput -Color Cyan "git: " -NoNewLine
+    Write-Host "$git"
+    
+    # Package managers
+    $npm = if (Test-CommandExists "npm") { & npm --version } else { $notDetected }
+    Write-ColorOutput -Color Cyan "npm: " -NoNewLine
+    Write-Host "$npm"
+    
+    $pnpm = if (Test-CommandExists "pnpm") { "Installed" } else { $notDetected }
+    Write-ColorOutput -Color Cyan "pnpm: " -NoNewLine
+    Write-Host "$pnpm"
+    
+    $yarn = if (Test-CommandExists "yarn") { "Installed" } else { $notDetected }
+    Write-ColorOutput -Color Cyan "yarn: " -NoNewLine
+    Write-Host "$yarn"
+    
+    # Check mkweb
+    $mkweb = if (Test-CommandExists "mkweb") { "Installed" } else { $notDetected }
+    Write-ColorOutput -Color Cyan "mkweb: " -NoNewLine
+    Write-Host "$mkweb"
+
+    exit 0
+}
+
+function Test-NodeVersion {
+    param (
+        [string]$MinimumVersion
+    )
+    
+    $nodeVersion = & node --version
+    $nodeVersion = $nodeVersion.Substring(1) # Remove 'v' prefix
+    
+    $currentVersionParts = $nodeVersion.Split(".") | ForEach-Object { [int]$_ }
+    $minimumVersionParts = $MinimumVersion.Split(".") | ForEach-Object { [int]$_ }
+    
+    for ($i = 0; $i -lt $minimumVersionParts.Count; $i++) {
+        if ($currentVersionParts[$i] -lt $minimumVersionParts[$i]) {
+            return $false
+        }
+        elseif ($currentVersionParts[$i] -gt $minimumVersionParts[$i]) {
+            return $true
+        }
+    }
+    
+    return $true
+}
+
+function Initialize-Project {
+    param (
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Params
+    )
+    
+    # Check if folder already exists
+    if (Test-Path $Params.FolderName) {
+        Write-Host "The folder " -NoNewline
+        Write-ColorOutput -Color Red $Params.FolderName -NoNewLine
+        Write-Host " already exists... Delete it if you want to create a new project."
+        exit 1
+    }
+    
+    # Check for Node.js
+    if (-not (Test-CommandExists "node")) {
+        Write-ColorOutput -Color Red "Node.js not found. Please install it from https://nodejs.org/"
+        exit 2
+    }
+    
+    # Check Node version
+    if (-not (Test-NodeVersion "18.3.0")) {
+        $nodeVersion = & node --version
+        Write-Host "Node 18 or higher is required. Your version is " -NoNewline
+        Write-ColorOutput -Color Red $nodeVersion
+        exit 6
+    }
+    
+    # Check for Git
+    if (-not (Test-CommandExists "git")) {
+        Write-ColorOutput -Color Red "git" -NoNewLine
+        Write-Host " not detected. You can install it from https://git-scm.com/"
+    }
+    
+    # Check for npm
+    $npmVersion = if (Test-CommandExists "npm") { 
+        [int](& npm --version).Split(".")[0] 
+    } else { 
+        0 
+    }
+    
+    if ($npmVersion -lt 7) {
+        Write-ColorOutput -Color Red "npm 7" -NoNewLine
+        Write-Host " or higher required. Update with " -NoNewline
+        Write-ColorOutput -Color Yellow "npm install -g npm"
+        exit 4
+    }
+    
+    # Determine which package manager to use
+    $pm = if (Test-CommandExists "pnpm") { 
+        "pnpm" 
+    } elseif (Test-CommandExists "yarn") { 
+        "yarn" 
+    } else { 
+        "npm" 
+    }
+    
+    # Step 1: Initialize Vite
+    Write-Host "[" -NoNewline
+    Write-ColorOutput -Color Yellow "1" -NoNewLine
+    Write-Host "/3] Installing " -NoNewline
+    Write-ColorOutput -Color Green "vite" -NoNewLine
+    Write-Host "..."
+    
+    & npm init vite@6.3.1 $Params.FolderName -y -- --template vanilla | Out-Null
+    
+    # Step 2: Create folder structure
+    Write-Host "[" -NoNewline
+    Write-ColorOutput -Color Yellow "2" -NoNewLine
+    Write-Host "/3] Creating " -NoNewline
+    Write-ColorOutput -Color Cyan "folder structure" -NoNewLine
+    Write-Host "..."
+    
+    Set-Location $Params.FolderName
+    
+    if (Test-CommandExists "git") {
+        & git init | Out-Null
+    }
+    
+    # Update package.json
+    $packageJson = Get-Content -Path "package.json" -Raw | ConvertFrom-Json
+    $packageJson.scripts.build = "rmdir /s /q dist 2>nul & vite build"
+    $packageJson.scripts.deploy = "gh-pages -d dist"
+    $packageJson.keywords = @()
+    $packageJson.license = "ISC"
+    $packageJson | ConvertTo-Json -Depth 32 | Set-Content -Path "package.json"
+    
+    # Create .gitignore
+    Add-Content -Path .gitignore -Value "!.vscode/settings.json"
+    
+    # Create .vscode directory
+    New-Item -ItemType Directory -Path .vscode -Force | Out-Null
+    
+    # Download VSCode settings.json
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/IntelectoDev/winmkweb/refs/heads/master/settings.json" -OutFile ".vscode/settings.json"
+    
+    # Create jsconfig.json
+    @'
+{
+	"compilerOptions": {
+		"baseUrl": ".",
+		"paths": {
+			"@/*": ["src/*"],
+		}
+	}
+}
+'@ | Set-Content -Path "jsconfig.json"
+    
+    # Create .vscode/extensions.json
+    @'
+{
+  "recommendations": [
+		"dbaeumer.vscode-eslint",
+		"stylelint.vscode-stylelint",
+		"esbenp.prettier-vscode",
+		"Tobermory.es6-string-html",
+		"wix.vscode-import-cost",
+		"oderwat.indent-rainbow"
+	]
+}
+'@ | Set-Content -Path ".vscode/extensions.json"
+    
+    # Clean up files from template
+    Remove-Item -Path "index.html", "src/main.js", "src/style.css", "src/counter.js", "src/javascript.svg", "public/vite.svg" -Force -ErrorAction SilentlyContinue
+    
+    # Create directories
+    New-Item -ItemType Directory -Path "public", "src/assets", "src/components", "src/modules" -Force | Out-Null
+    
+    # Create base files
+    New-Item -ItemType File -Path "src/index.css", "src/index.js" -Force | Out-Null
+    
+    # Add content to index.css
+    @'
+body {
+  background: #171717;
+  color: #fff;
+}
+'@ | Set-Content -Path "src/index.css"
+    
+    # Add content to index.html
+    @'
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+  <link rel="stylesheet" href="./index.css">
+  <script type="module" src="./index.js"></script>
+</head>
+<body>
+
+</body>
+</html>
+'@ | Set-Content -Path "src/index.html"
+    
+    # Add content to vite.config.js
+    @'
+import tsconfigPaths from "vite-tsconfig-paths";
+import { defineConfig } from "vite";
+import path from "node:path";
+
+const isGitHubPages = true;
+const folderName = path.basename(process.cwd()) + "/";
+const mode = process.env.NODE_ENV === "production" ? "production" : "development";
+const base = mode === "production" && isGitHubPages ? "/" + folderName : "/";
+
+export default defineConfig({
+  root: "src",
+  base,
+  mode,
+  envDir: "../",
+  publicDir: "../public",
+  plugins: [tsconfigPaths()],
+  resolve: {
+    alias: {
+      "@": new URL("./src", import.meta.url).pathname
+    }
+  },
+  build: {
+    outDir: "../dist",
+    assetsDir: "./"
+  }
+});
+'@ | Set-Content -Path "vite.config.js"
+    
+    # Add content to eslint.config.js
+    @'
+import { recommended } from "eslint-config-manzdev";
+
+export default [
+  ...recommended,
+  {
+    rules: {
+      /* Tus reglas aquí */
+    }
+  }
+];
+'@ | Set-Content -Path "eslint.config.js"
+    
+    # Add content to .stylelintrc
+    @'
+{
+  "extends": "stylelint-config-manzdev",
+  "rules": {
+  }
+}
+'@ | Set-Content -Path ".stylelintrc"
+    
+    # Handle specific project types (Phaser, Lit)
+    $devDependencies = @(
+        "stylelint@16.3.1", "stylelint-config-manzdev",
+        "eslint@9.22.0", "eslint-config-manzdev@1.0.14-alpha",
+        "gh-pages",
+        "vite-tsconfig-paths"
+    )
+    
+    $dependencies = @()
+    
+    if ($Params.IsPhaser) {
+        Remove-Item -Path "src/components", "src/assets" -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Path "public/assets/sprites", "public/assets/sounds", "src/scenes" -Force | Out-Null
+        $dependencies += "phaser"
+    }
+    
+    if ($Params.IsLit) {
+        $dependencies += "lit"
+    }
+    
+    # Step 3: Install dependencies
+    Write-Host "[" -NoNewline
+    Write-ColorOutput -Color Yellow "3" -NoNewLine
+    Write-Host "/3] Preparing " -NoNewline
+    Write-ColorOutput -Color Magenta "dependencies" -NoNewLine
+    Write-Host "..."
+    
+    # Install dependencies
+    if ($dependencies.Count -gt 0) {
+        & npx add-dependencies ($dependencies -join " ") 2>$null
+    }
+    
+    # Install dev dependencies
+    & npx add-dependencies ($devDependencies -join " ") --dev 2>$null
+    
+    # Final message
+    Write-Host ""
+    Write-ColorOutput -Color Green "Ready!" -NoNewLine
+    Write-Host " To start, type:"
+    Write-Host ""
+    Write-Host "cd $($Params.FolderName)"
+    Write-Host "git remote add origin <repo>"
+    Write-Host "$pm install"
+    Write-Host "$pm run dev"
+}
+
+# Main script execution
+# Parse command line arguments
+$arguments = @{
+    FolderName = if ($args[0] -and $args[0] -notmatch '^--') { $args[0] }
+    Help = $args -contains "--help" -or $args -contains "-h"
+    Check = $args -contains "--check"
+    Phaser = $args -contains "--phaser"
+    Lit = $args -contains "--lit"
+    Version = $args -contains "--version" -or $args -contains "-v"
+    Update = $args -contains "--update"
+}
+$params = Get-MkwebParams @arguments
+
+# Execute the appropriate action based on parameters
+if ($params.IsHelp) {
+    Show-Help
+    exit 0
+}
+
+if ($params.IsVersion) {
+    Write-Host $VERSION
+    exit 0
+}
+
+if ($params.IsCheck) {
+    Check-Dependencies
+    exit 0
+}
+
+if ($params.IsUpdate) {
+    Update-Mkweb
+    exit 0
+}
+
+# For any other operation, we need a folder name
+if (-not $params.FolderName) {
+    Write-ColorOutput -Color Red "Error: Missing folder name"
+    Write-Host "Use mkweb --help for usage information"
+    exit 1
+}
+
+# Initialize the project
+Initialize-Project -Params $params
